@@ -1,0 +1,53 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { resolveIdentity, resumeArgv } = require('../../native/identity');
+
+test('same-directory agents retain distinct per-process conversations', () => {
+  const a = resolveIdentity({ tool: 'opencode', pid: 101, start: '10', cwd: '/same' },
+    { pid: 101, process_start: '10', session_id: 'ses_first' });
+  const b = resolveIdentity({ tool: 'opencode', pid: 102, start: '11', cwd: '/same' },
+    { pid: 102, process_start: '11', session_id: 'ses_second' });
+  assert.equal(a.state, 'exact');
+  assert.equal(b.state, 'exact');
+  assert.equal(a.session, 'ses_first');
+  assert.equal(b.session, 'ses_second');
+});
+
+test('PID reuse, missing lifetime evidence and another PID cannot prove identity', () => {
+  const processInfo = { tool: 'opencode', pid: 101, start: '20' };
+  for (const record of [
+    null,
+    { pid: 101, process_start: '10', session_id: 'ses_stale' },
+    { pid: 101, session_id: 'ses_unproved' },
+    { pid: 102, process_start: '20', session_id: 'ses_other' },
+  ]) assert.equal(resolveIdentity(processInfo, record).state, 'unresolved');
+});
+
+test('current Claude native mapping takes precedence over a stale launch argument', () => {
+  const session = '12345678-1234-1234-1234-123456789abc';
+  const identity = resolveIdentity({
+    tool: 'claude', pid: 9, start: '123', argv: ['claude', '--resume', 'old-session'],
+  }, { pid: 9, procStart: '123', sessionId: session });
+  assert.equal(identity.session, session);
+  assert.deepEqual(resumeArgv(identity), ['claude', '--resume', session]);
+});
+
+test('recovery never replays the original prompt, flags or environment', () => {
+  const identity = resolveIdentity({ tool: 'opencode', pid: 4, start: '8' }, {
+    pid: 4, process_start: '8', session_id: 'ses_saved',
+    argv: ['opencode', '--prompt', 'delete everything'],
+    env: { API_KEY: 'private' },
+  });
+  assert.deepEqual(resumeArgv(identity), ['opencode', '-s', 'ses_saved']);
+  assert.ok(!Object.hasOwn(identity, 'env'));
+  assert.ok(!Object.hasOwn(identity, 'argv'));
+});
+
+test('unresolved identities and malformed identifiers cannot become commands', () => {
+  assert.throws(() => resumeArgv({ state: 'unresolved', tool: 'opencode', session: 'ses_x' }));
+  assert.throws(() => resumeArgv({ state: 'exact', tool: 'opencode', session: 'ses_x;touch /bad' }));
+  assert.equal(resolveIdentity({ tool: 'claude', pid: 1, start: '1' },
+    { pid: 1, procStart: '1', sessionId: 'not-a-uuid' }).state, 'unresolved');
+});

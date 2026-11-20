@@ -1,5 +1,10 @@
 # herdr-resurrect
 
+> **Delphos native-mod port in progress.** The instructions below describe the
+> upstream plugin for the older `herdr` interface. Do not install it into the
+> current `herdr-app`/`hc` setup. See [native port status](native/README.md)
+> and [the approved plan](plan/plan.md).
+
 **tmux-resurrect for [herdr](https://herdr.dev).** Snapshot your whole herd —
 workspaces, tabs, panes, working directories, the programs running in each pane,
 and your AI agents — to durable, versioned files on disk, and bring it all back
