@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
-const { planInstall, applyInstall } = require('../native/install');
+const { planInstall, applyInstall, uninstall } = require('../native/install');
 const { readJson, privateDirectory, atomicJson } = require('../native/store');
 
 const { values, positionals } = parseArgs({
@@ -13,7 +13,7 @@ const { values, positionals } = parseArgs({
 });
 try {
   if (process.platform !== 'linux') throw new Error('The installer currently supports Linux and WSL only.');
-  if (positionals.length !== 1) throw new Error('Choose plan or apply.');
+  if (positionals.length !== 1) throw new Error('Choose plan, apply or uninstall.');
   if (positionals[0] === 'plan') {
     if (!path.isAbsolute(values.output || '')) throw new Error('--output must name an absolute private plan file.');
     const result = planInstall(values.prefix ? { prefix: values.prefix } : {});
@@ -26,6 +26,9 @@ try {
     const plan = readJson(values.plan);
     if (!plan) throw new Error('The reviewed installation plan is missing.');
     process.stdout.write(JSON.stringify(applyInstall(plan, { activate: values.activate })) + '\n');
+  } else if (positionals[0] === 'uninstall') {
+    if (!path.isAbsolute(values.prefix || '')) throw new Error('--prefix must name the installed directory.');
+    process.stdout.write(JSON.stringify(uninstall(values.prefix)) + '\n');
   } else throw new Error('Unknown installation operation.');
 } catch (error) {
   process.stderr.write(JSON.stringify({ error: error.message }) + '\n');

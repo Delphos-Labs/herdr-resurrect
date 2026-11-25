@@ -23,11 +23,15 @@ function execute(argv, env = process.env) {
   process.execve(file, argv, env);
 }
 
+// The wrapped shell, kept so any failure still opens a usable terminal.
+let fallback = null;
+
 async function main() {
   const { values, positionals: original } = parseArgs({
     options: { config: { type: 'string' } }, allowPositionals: true,
   });
   if (!original.length) throw new Error('The original shell command is required after --.');
+  fallback = original;
   const config = readConfig(values.config);
   if ((process.env.HC_SESSION || 'default') !== config.session) return execute(original);
   const options = hostOptions(config);
@@ -105,5 +109,13 @@ async function main() {
 
 main().catch(error => {
   process.stderr.write(`Herdr recovery shell failed: ${error.message}\n`);
+  const shell = fallback;
+  fallback = null;
+  if (shell) {
+    process.stderr.write('Opening the shell without recovery.\n');
+    try { return execute(shell); } catch (failure) {
+      process.stderr.write(`Herdr recovery could not start the shell: ${failure.message}\n`);
+    }
+  }
   process.exitCode = 1;
 });

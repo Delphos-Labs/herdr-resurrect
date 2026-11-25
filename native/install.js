@@ -33,7 +33,7 @@ function shellPatch(text, gateway, fallback) {
   if (!Array.isArray(original) || !original.length || original.some(value => typeof value !== 'string')) {
     throw new Error('The existing core shell is not a supported command array.');
   }
-  if (original.some(value => ['herdr-wake', 'native-shell.js'].includes(path.basename(value)))) {
+  if (original.some(value => ['herdr-wake', 'native-shell.js', 'native-shell.sh'].includes(path.basename(value)))) {
     throw new Error('A recovery shell hook is already configured. Do not nest recovery engines.');
   }
   if (path.basename(original[0]) === 'tmux') throw new Error('Choose a real shell before replacing tmux.');
@@ -90,7 +90,8 @@ function packageFiles(packageRoot) {
   }
   for (const item of [
     'native', 'integrations/opencode', 'mods/resurrect', 'LICENSE', 'package.json', 'package-lock.json',
-    'bin/native-control.js', 'bin/native-recorder.js', 'bin/native-shell.js', 'bin/native-install.js',
+    'bin/native-control.js', 'bin/native-recorder.js', 'bin/native-shell.js', 'bin/native-shell.sh',
+    'bin/native-install.js',
   ]) visit(item);
   const lock = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package-lock.json')));
   for (const key of Object.keys(lock.packages || {}).sort()) {
@@ -130,7 +131,9 @@ function planInstall({
   validateConfig(config);
   const configCore = path.join(configHome, 'herdr-core/config.toml');
   const current = readExisting(configCore);
+  // /bin/sh launches the gateway, so a missing Node still opens the plain shell.
   const patch = shellPatch(current.content, [
+    '/bin/sh', path.join(prefix, 'bin/native-shell.sh'),
     node, path.join(prefix, 'bin/native-shell.js'), '--config', configFile,
   ], shell);
   const cli = path.join(configHome, 'opencode/cli.json');
@@ -240,4 +243,38 @@ function applyInstall(plan, { activate = false } = {}) {
   return { installed: true, activated: activate, prefix: plan.prefix, configFile: plan.configFile };
 }
 
-module.exports = { planInstall, applyInstall, shellPatch, serviceUnit, packageFiles };
+// Reverses applyInstall. Every file must still hold exactly what was installed,
+// so a later manual edit is never overwritten; nothing changes if one differs.
+function uninstall(prefix, { deactivate = true, run = execFileSync } = {}) {
+  const record = path.join(prefix, '.installation');
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(path.join(record, 'manifest.json'), 'utf8')); } catch {
+    throw new Error('No installation manifest found; nothing was changed.');
+  }
+  const steps = manifest.files.map((file, index) => {
+    const current = readExisting(file.path);
+    if (current.digest !== file.installed) {
+      throw new Error(`${file.path} changed after installation; restore it by hand. Nothing was changed.`);
+    }
+    const before = file.before === null ? null : fs.readFileSync(path.join(record, `before-${index}`), 'utf8');
+    if (before !== null && hash(before) !== file.before) throw new Error(`Saved copy of ${file.path} is damaged.`);
+    return { path: file.path, before };
+  });
+  if (deactivate) {
+    run('systemctl', ['--user', 'disable', '--now', 'herdr-resurrect.service'],
+      { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+  }
+  for (const step of steps) {
+    if (step.before === null) fs.rmSync(step.path, { force: true });
+    else {
+      const temporary = path.join(path.dirname(step.path), `.${path.basename(step.path)}.${randomUUID()}.tmp`);
+      fs.writeFileSync(temporary, step.before, { flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporary, step.path);
+    }
+  }
+  if (deactivate) run('systemctl', ['--user', 'daemon-reload'], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+  fs.rmSync(prefix, { recursive: true, force: true });
+  return { uninstalled: true, restored: steps.map(step => step.path) };
+}
+
+module.exports = { planInstall, applyInstall, uninstall, shellPatch, serviceUnit, packageFiles };

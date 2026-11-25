@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { planInstall, applyInstall, shellPatch, serviceUnit } = require('../../native/install');
+const { planInstall, applyInstall, uninstall, shellPatch, serviceUnit } = require('../../native/install');
 const { readConfig } = require('../../native/config');
 
 function home(t) {
@@ -70,6 +70,58 @@ test('changed configuration and edited installation plans cannot be applied', t 
   fs.writeFileSync(plan.configFile, '{"user":"changed"}');
   assert.throws(() => applyInstall(plan), /plan changed|configuration is stale/);
   assert.equal(fs.existsSync(plan.prefix), false);
+});
+
+function installedHome(t) {
+  const directory = home(t);
+  const configHome = path.join(directory, '.config');
+  fs.mkdirSync(path.join(configHome, 'opencode'), { recursive: true });
+  fs.mkdirSync(path.join(configHome, 'herdr-core'), { recursive: true });
+  const cli = '{"plugins":["existing"]}\n';
+  const core = '# keep\nshell = ["fish"]\n';
+  fs.writeFileSync(path.join(configHome, 'opencode/cli.json'), cli);
+  fs.writeFileSync(path.join(configHome, 'herdr-core/config.toml'), core);
+  const plan = planInstall({ home: directory, configHome, stateHome: path.join(directory, 'state'),
+    dataHome: path.join(directory, 'data'), shell: ['/bin/sh'] });
+  applyInstall(plan);
+  return { plan, configHome, cli, core };
+}
+
+test('the core shell starts the gateway through /bin/sh so a missing Node still opens the shell', t => {
+  const { plan, configHome } = installedHome(t);
+  const text = fs.readFileSync(path.join(configHome, 'herdr-core/config.toml'), 'utf8');
+  const shell = JSON.parse(text.match(/^shell = (.*)$/m)[1]);
+  assert.deepEqual(shell.slice(0, 2), ['/bin/sh', path.join(plan.prefix, 'bin/native-shell.sh')]);
+  assert.deepEqual(shell.slice(-2), ['--', 'fish']);
+  assert.ok(fs.existsSync(path.join(plan.prefix, 'bin/native-shell.sh')));
+});
+
+test('uninstall restores every file exactly and removes the installation', t => {
+  const { plan, configHome, cli, core } = installedHome(t);
+  const calls = [];
+  const result = uninstall(plan.prefix, { run: (...args) => calls.push(args) });
+  assert.equal(result.uninstalled, true);
+  assert.equal(fs.readFileSync(path.join(configHome, 'opencode/cli.json'), 'utf8'), cli);
+  assert.equal(fs.readFileSync(path.join(configHome, 'herdr-core/config.toml'), 'utf8'), core);
+  assert.equal(fs.existsSync(plan.configFile), false);
+  assert.equal(fs.existsSync(plan.unitFile), false);
+  assert.equal(fs.existsSync(plan.prefix), false);
+  assert.deepEqual(calls.map(([command, args]) => [command, ...args]), [
+    ['systemctl', '--user', 'disable', '--now', 'herdr-resurrect.service'],
+    ['systemctl', '--user', 'daemon-reload'],
+  ]);
+});
+
+test('uninstall changes nothing when an installed file was edited afterwards', t => {
+  const { plan, configHome } = installedHome(t);
+  const core = path.join(configHome, 'herdr-core/config.toml');
+  fs.appendFileSync(core, 'notes = true\n');
+  const edited = fs.readFileSync(core, 'utf8');
+  const calls = [];
+  assert.throws(() => uninstall(plan.prefix, { run: (...args) => calls.push(args) }), /changed after installation/);
+  assert.equal(fs.readFileSync(core, 'utf8'), edited);
+  assert.ok(fs.existsSync(plan.prefix));
+  assert.deepEqual(calls, []);
 });
 
 test('service commands escape systemd expansion and do not save credentials', () => {
