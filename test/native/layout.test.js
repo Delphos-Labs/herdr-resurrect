@@ -41,3 +41,23 @@ test('duplicate identities and duplicate terminal references are refused', () =>
   assert.throws(() => validateLayout(source), /duplicate layout identity/);
   assert.throws(() => validateLayout(layout(['t1', 't1'])), /Duplicate terminal reference/);
 });
+
+test('a tab root that shares its tab id, as herdr-app writes it, is accepted', () => {
+  // Shape of a live herdr-app 0.1 document: each tab's root row reuses the tab id.
+  const live = { spaces: [
+    { id: 'sp1', name: 'Work', folder: '/home/u', tabs: [
+      { id: 'tb1', name: 'one', root: { id: 'tb1', type: 'row', children: [
+        { id: 'pa', type: 'block', content: { terminal: 't1' } }] } },
+      { id: 'tb2', name: 'two', root: { id: 'tb2', type: 'row', children: [
+        { id: 'pb', type: 'block', content: { terminal: 't2' } }] } },
+    ] },
+  ] };
+  assert.deepEqual(validateLayout(live), ['t1', 't2']);
+  assert.deepEqual(validateLayout(remapLayout(live, { t1: 't8', t2: 't9' })), ['t8', 't9']);
+  const nested = structuredClone(live);
+  nested.spaces[0].tabs[0].root.children[0] = { id: 'tb1', type: 'block', content: { terminal: 't1' } };
+  assert.throws(() => validateLayout(nested), /duplicate layout identity/);
+  const crossTab = structuredClone(live);
+  crossTab.spaces[0].tabs[1].root.id = 'tb1';
+  assert.throws(() => validateLayout(crossTab), /duplicate layout identity/);
+});

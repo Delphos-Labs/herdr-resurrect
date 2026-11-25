@@ -10,15 +10,18 @@ function validateLayout(document) {
   const ids = new Set();
   const terminals = new Set();
   let count = 0;
-  function identify(value) {
-    if (!value || typeof value.id !== 'string' || !value.id || ids.has(value.id)) {
+  function identify(value, owner) {
+    if (!value || typeof value.id !== 'string' || !value.id) {
       throw new Error('Missing or duplicate layout identity.');
     }
+    // herdr-app gives a tab's root split the same id as the tab itself.
+    if (owner !== undefined && value.id === owner) return;
+    if (ids.has(value.id)) throw new Error('Missing or duplicate layout identity.');
     ids.add(value.id);
   }
-  function visit(node, depth) {
+  function visit(node, depth, owner) {
     if (++count > MAX_NODES || depth > MAX_DEPTH) throw new Error('Layout is too large.');
-    identify(node);
+    identify(node, owner);
     if (node.type === 'row' || node.type === 'column') {
       if (!Array.isArray(node.children) || !node.children.length) {
         throw new Error('A split must contain children.');
@@ -47,7 +50,7 @@ function validateLayout(document) {
     if (!Array.isArray(space.tabs)) throw new Error('Unsupported tab collection.');
     for (const tab of space.tabs) {
       identify(tab);
-      visit(tab.root, 0);
+      visit(tab.root, 0, tab.id);
     }
   }
   return [...terminals];
