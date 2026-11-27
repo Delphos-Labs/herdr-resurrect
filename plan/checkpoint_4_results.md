@@ -1,8 +1,8 @@
 # Checkpoint 4: lifecycle recovery on a Coder VM
 
 Date: 25 November 2026, UTC.
-Status: partial. Scheduled stop and core-only restart passed for shells, tools
-and a real Claude conversation. Not yet run: OpenCode after a VM stop, abrupt
+Status: partial. Scheduled stop and core-only restart passed for shells, tools,
+a real Claude conversation and a real OpenCode session. Not yet run: abrupt
 stop, desktop app recovery.
 Live installation has not started and needs Michael's approval.
 
@@ -44,7 +44,8 @@ nothing starts a core at boot and lingering is not restored. The durable fix is
 | Stop only `hc-serve` | Programs kept running under `hc-hold` (start 22:21:50, new server 22:24:24); preview all `keep-live` |
 | Abrupt stop | Not run. Both attempts ended locally with `Terminated` before reaching the VM |
 | Real Claude after VM stop | Pass after the profile fix below (27 November). The resumed session showed its history and answered with the saved marker in the same transcript |
-| Real OpenCode after VM stop | Not run. OpenCode is blocked on the VM, see checkpoint 3 |
+| Real OpenCode after VM stop | Pass for resumption (27 November): restore ran `opencode -s <id>` for the saved session, which showed its saved prompt. The VM's OpenCode provider sign-in is stale (HTTP 401), so no model reply was possible before or after |
+| Both agents after one more VM stop | Pass: a fifth boot restored 5 programs; Claude answered the marker again, OpenCode reopened its session |
 | Desktop app recovery and rendering | Not run |
 
 ## Real Claude after VM stop
@@ -72,13 +73,26 @@ directory as unset. After the fix the restored process had no
 `CLAUDE_CONFIG_DIR`, and the marker question received a new reply
 (assistant replies 2 to 3) containing the marker.
 
+## Real OpenCode after VM stop
+
+The VM's OpenCode database was moved aside to
+`~/.local/share/opencode-db-aside-20261127`, which ended the stuck migration.
+OpenCode 2.4.1 then started and `npm run test:guard` passed (see checkpoint 3).
+OpenCode was started by typing `opencode` into a core shell, and given a
+marker prompt. The tracker plugin wrote its record, and after reconcile the
+recorder saved the session as `exact`. After a Coder stop and start, restore
+launched `opencode -s ses_de18d271bffeT542b9k5jHpKB2` and the screen showed
+the saved prompt with the marker. Two old personal OpenCode plugins on the VM
+fail to load under 2.4; the Herdr tracker is unaffected.
+
 A test-script defect also surfaced: the script reused a restored pane's id
 for a new pane. The recorder refused the duplicate and reported
 `Missing or duplicate layout identity.` in `status` until it was corrected.
 
 ## Before live installation
 
-- Run the OpenCode case after a VM stop once OpenCode works on the VM.
+- Optional: repeat the OpenCode case with a model reply after signing the VM's
+  OpenCode provider in again.
 - Add the cloud-init lingering line to both Coder templates.
 - Run the native mod check and inspect the panel in the app.
 - Keep `uninstall` as the rollback; it is tested on the VM.

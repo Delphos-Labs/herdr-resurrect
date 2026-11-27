@@ -2,7 +2,7 @@
 
 Date: 25 November 2026, UTC.
 Status: passed for the recorder service, controls and installer on a Coder test VM.
-Not passed: OpenCode missing-session guard on that VM, and the native mod check.
+Not passed: the native mod check. The OpenCode guard passed on 27 November.
 
 ## Bottom line
 
@@ -34,7 +34,7 @@ terminal with no shell.
 |---|---|---|
 | `npm test` | WSL and test VM | 59 pass |
 | `npm run test:integration` | test VM | 7 pass |
-| `npm run test:guard` | test VM | Failed: environment, see below |
+| `npm run test:guard` | test VM | Pass on 27 November after the OpenCode database was moved aside; failed before, see below |
 | Install plan, apply, activate | test VM | Pass |
 | Uninstall after real install | test VM | Pass; core shell restored to `fish`, service removed, snapshots kept |
 | New terminal through installed launcher | test VM | Pass; process is `fish` |
