@@ -64,3 +64,18 @@ test('100 panes share one process inventory; unavailable terminals stay explicit
   assert.equal(snapshot.programs.length, 100);
   assert.ok(snapshot.programs.every(p => p.state === 'unresolved' && p.reason === 'Terminal is not live.'));
 });
+
+test('capture records whether the Claude process set its profile variable', async t => {
+  const { spawn } = require('node:child_process');
+  const { claudeProfile } = require('../../native/capture');
+  const start = env => {
+    const child = spawn('sleep', ['30'], { env, stdio: 'ignore' });
+    t.after(() => child.kill());
+    return child.pid;
+  };
+  const { CLAUDE_CONFIG_DIR: _unset, ...plain } = process.env;
+  assert.deepEqual(claudeProfile(start(plain), '/home/u/.claude'),
+    { directory: '/home/u/.claude', explicit: false });
+  assert.deepEqual(claudeProfile(start({ ...plain, CLAUDE_CONFIG_DIR: '/home/u/.claude' }), '/fallback'),
+    { directory: '/home/u/.claude', explicit: true });
+});

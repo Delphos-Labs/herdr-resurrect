@@ -7,7 +7,7 @@ const { isDeepStrictEqual } = require('node:util');
 const lockfile = require('proper-lockfile');
 const { validateLayout, remapLayout } = require('./layout');
 const { validateSnapshot } = require('./store');
-const { resumeArgv } = require('./identity');
+const { resumeArgv, launchFor } = require('./identity');
 const { toolArgv } = require('./tools');
 const { verifySession: defaultVerifySession } = require('./sessions');
 const { readPending, requestResume } = require('./pending');
@@ -156,10 +156,9 @@ async function restore(core, snapshot, { stateDir, host, env = {}, verifySession
         resumed++;
         continue;
       }
-      const launch = program.tool === 'claude' && program.profile
-        ? { ...env, CLAUDE_CONFIG_DIR: program.profile } : env;
+      const launch = launchFor(program, action.argv, env);
       const terminal = await core.request('terminal.run', {
-        argv: action.argv, cwd: action.cwd, env: launch, no_parent: true, no_notify: true,
+        argv: launch.argv, cwd: action.cwd, env: launch.env, no_parent: true, no_notify: true,
         outlive_parent: true, keep: true,
         labels: { 'resurrect.host': host, 'resurrect.pane': action.pane, 'resurrect.run': run },
       });

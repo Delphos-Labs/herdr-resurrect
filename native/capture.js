@@ -62,7 +62,7 @@ function claudeProfile(pid, fallback) {
   const entry = environment.find(value => value.startsWith('CLAUDE_CONFIG_DIR='));
   const directory = entry?.slice('CLAUDE_CONFIG_DIR='.length) || fallback;
   if (!path.isAbsolute(directory || '')) throw new Error('Claude profile directory is unavailable.');
-  return directory;
+  return { directory, explicit: Boolean(entry) };
 }
 
 async function captureLocal(core, options) {
@@ -102,12 +102,12 @@ async function captureLocal(core, options) {
       const cwd = fs.readlinkSync(`/proc/${candidate.pid}/cwd`);
       const profile = candidate.tool === 'claude' ? claudeProfile(candidate.pid, options.claudeConfigDir) : undefined;
       const identity = AGENTS.has(candidate.tool)
-        ? readIdentity({ ...candidate, start }, { ...options, ...(profile ? { claudeConfigDir: profile } : {}) })
+        ? readIdentity({ ...candidate, start }, { ...options, ...(profile ? { claudeConfigDir: profile.directory } : {}) })
         : await captureTool(fs.readFileSync(`/proc/${candidate.pid}/cmdline`, 'utf8')
           .split('\0').filter(Boolean), cwd, toolOptions);
       if (processStart(candidate.pid) !== start) throw new Error('Process changed during capture.');
       return { terminal: address, cwd, ...identity,
-        ...(profile ? { profile } : {}),
+        ...(profile ? { profile: profile.directory, profileExplicit: profile.explicit } : {}),
         ...(['exact', 'tool'].includes(identity.state) ? { verified_at: at } : {}) };
     } catch (error) {
       return { terminal: address, state: 'unresolved',
@@ -126,4 +126,4 @@ async function captureLocal(core, options) {
   };
 }
 
-module.exports = { captureLocal, paneAgents, panePrograms, processInventory, processStart };
+module.exports = { captureLocal, claudeProfile, paneAgents, panePrograms, processInventory, processStart };

@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const SESSION_IDS = {
@@ -80,4 +81,18 @@ function resumeArgv(identity) {
     : ['claude', '--resume', identity.session];
 }
 
-module.exports = { resolveIdentity, readIdentity, resumeArgv };
+// Claude reads ~/.claude.json while CLAUDE_CONFIG_DIR is unset, and
+// $CLAUDE_CONFIG_DIR/.claude.json once it is set, even to ~/.claude. A launch
+// must therefore repeat whether the original process set the variable, not
+// only which directory it used. Snapshots older than profileExplicit record
+// the default directory for an unset variable.
+function launchFor(program, argv, env, home = os.homedir()) {
+  if (program.tool !== 'claude' || !program.profile) return { argv, env };
+  const explicit = typeof program.profileExplicit === 'boolean'
+    ? program.profileExplicit : path.resolve(program.profile) !== path.join(home, '.claude');
+  if (explicit) return { argv, env: { ...env, CLAUDE_CONFIG_DIR: program.profile } };
+  const { CLAUDE_CONFIG_DIR: _unset, ...rest } = env;
+  return { argv: ['env', '-u', 'CLAUDE_CONFIG_DIR', ...argv], env: rest };
+}
+
+module.exports = { resolveIdentity, readIdentity, resumeArgv, launchFor };

@@ -1,8 +1,9 @@
 # Checkpoint 4: lifecycle recovery on a Coder VM
 
 Date: 25 November 2026, UTC.
-Status: partial. Scheduled stop and core-only restart passed for shells and tools.
-Not yet run: real agents after a VM stop, abrupt stop, desktop app recovery.
+Status: partial. Scheduled stop and core-only restart passed for shells, tools
+and a real Claude conversation. Not yet run: OpenCode after a VM stop, abrupt
+stop, desktop app recovery.
 Live installation has not started and needs Michael's approval.
 
 ## Test host
@@ -42,14 +43,42 @@ nothing starts a core at boot and lingering is not restored. The durable fix is
 | Interrupted write | The Coder stop left one `.tmp` snapshot file; all 27 saved snapshots parsed |
 | Stop only `hc-serve` | Programs kept running under `hc-hold` (start 22:21:50, new server 22:24:24); preview all `keep-live` |
 | Abrupt stop | Not run. Both attempts ended locally with `Terminated` before reaching the VM |
-| Real Claude and OpenCode after VM stop | Not run. Claude is not signed in on the VM; OpenCode is blocked, see checkpoint 3 |
+| Real Claude after VM stop | Pass after the profile fix below (27 November). The resumed session showed its history and answered with the saved marker in the same transcript |
+| Real OpenCode after VM stop | Not run. OpenCode is blocked on the VM, see checkpoint 3 |
 | Desktop app recovery and rendering | Not run |
+
+## Real Claude after VM stop
+
+A Claude session was started by typing `claude` into a normal core shell in
+`~/herdr-test/agent`, and given a marker. The recorder saved it as `exact`
+(PID and process start). The VM then went through three stop and start cycles:
+one requested, two from the 14-hour autostop. The snapshot stayed held at
+`recovery-pending` across all of them, including after an unreconciled restore.
+
+The first two restores launched `claude --resume <id>` correctly, but Claude
+showed the folder trust dialog, whose default is "No, exit".
+Cause: capture recorded the fallback `~/.claude` as the profile when the
+process had no `CLAUDE_CONFIG_DIR`, and restore always set the variable.
+Claude reads `~/.claude.json` while the variable is unset and
+`$CLAUDE_CONFIG_DIR/.claude.json` once it is set, even to `~/.claude`.
+Every restored default-profile session therefore started with an empty
+configuration: no trust, no onboarding, no project state.
+
+Fix: capture records `profileExplicit`. Restore and the shell gateway set the
+variable only when the original process set it; otherwise restore launches
+through `env -u CLAUDE_CONFIG_DIR`, because `terminal.run` cannot unset a
+variable from the core's environment. Older snapshots treat only the default
+directory as unset. After the fix the restored process had no
+`CLAUDE_CONFIG_DIR`, and the marker question received a new reply
+(assistant replies 2 to 3) containing the marker.
+
+A test-script defect also surfaced: the script reused a restored pane's id
+for a new pane. The recorder refused the duplicate and reported
+`Missing or duplicate layout identity.` in `status` until it was corrected.
 
 ## Before live installation
 
-- Run the real-agent case after a VM stop: sign Claude in on the VM, start a
-  Claude session in the test core, stop and start the VM, restore, and check
-  that the conversation resumes.
+- Run the OpenCode case after a VM stop once OpenCode works on the VM.
 - Add the cloud-init lingering line to both Coder templates.
 - Run the native mod check and inspect the panel in the app.
 - Keep `uninstall` as the rollback; it is tested on the VM.

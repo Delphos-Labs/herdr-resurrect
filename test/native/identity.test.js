@@ -51,3 +51,28 @@ test('unresolved identities and malformed identifiers cannot become commands', (
   assert.equal(resolveIdentity({ tool: 'claude', pid: 1, start: '1' },
     { pid: 1, procStart: '1', sessionId: 'not-a-uuid' }).state, 'unresolved');
 });
+
+test('a Claude profile is set at launch only when the original process set it', () => {
+  const { launchFor } = require('../../native/identity');
+  const argv = ['claude', '--resume', '12345678-1234-1234-1234-123456789abc'];
+  const caller = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/caller/profile' };
+  const swap = { tool: 'claude', profile: '/home/u/.swap/a', profileExplicit: true };
+  assert.deepEqual(launchFor(swap, argv, caller, '/home/u'),
+    { argv, env: { PATH: '/bin', CLAUDE_CONFIG_DIR: '/home/u/.swap/a' } });
+  // Claude reads ~/.claude.json only while the variable is unset, even when it
+  // would name ~/.claude. The core's own environment may set it, so remove it in argv.
+  const plain = { tool: 'claude', profile: '/home/u/.claude', profileExplicit: false };
+  assert.deepEqual(launchFor(plain, argv, caller, '/home/u'),
+    { argv: ['env', '-u', 'CLAUDE_CONFIG_DIR', ...argv], env: { PATH: '/bin' } });
+});
+
+test('snapshots without the profile flag treat only the default directory as unset', () => {
+  const { launchFor } = require('../../native/identity');
+  const argv = ['claude', '--resume', '12345678-1234-1234-1234-123456789abc'];
+  assert.equal(launchFor({ tool: 'claude', profile: '/home/u/.claude' }, argv, {}, '/home/u').argv[0], 'env');
+  assert.deepEqual(launchFor({ tool: 'claude', profile: '/home/u/.other' }, argv, {}, '/home/u'),
+    { argv, env: { CLAUDE_CONFIG_DIR: '/home/u/.other' } });
+  const opencode = ['opencode', '-s', 'ses_one'];
+  assert.deepEqual(launchFor({ tool: 'opencode' }, opencode, { A: '1' }, '/home/u'),
+    { argv: opencode, env: { A: '1' } });
+});

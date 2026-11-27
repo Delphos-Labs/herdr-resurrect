@@ -137,3 +137,13 @@ test('merge preserves unrelated spaces and refuses changed geometry', () => {
   current.spaces[0].tabs[0].root.children[0].size.weight = 99;
   assert.throws(() => mergeLayout(saved, current, { t1: 'new' }), /Layout changed/);
 });
+
+test('a default-profile Claude session is launched without a Claude profile variable', async t => {
+  const env = setup(t);
+  const claude = env.saved.programs.find(program => program.tool === 'claude');
+  Object.assign(claude, { profile: path.join(os.homedir(), '.claude'), profileExplicit: false });
+  await restore(env.core, env.saved, { ...options(env), env: { CLAUDE_CONFIG_DIR: '/caller/profile' } });
+  const run = env.calls.find(call => call.method === 'terminal.run' && call.params.argv.includes('--resume'));
+  assert.deepEqual(run.params.argv.slice(0, 4), ['env', '-u', 'CLAUDE_CONFIG_DIR', 'claude']);
+  assert.ok(!Object.hasOwn(run.params.env, 'CLAUDE_CONFIG_DIR'));
+});
