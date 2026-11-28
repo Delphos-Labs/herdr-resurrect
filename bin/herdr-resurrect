@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+'use strict';
+
+// herdr-resurrect install [--no-activate]   install, upgrade, or confirm the installation
+// herdr-resurrect uninstall                 restore every changed file and remove it
+// herdr-resurrect status|preview|restore --ticket T|reconcile|save
+const os = require('node:os');
+const path = require('node:path');
+
+const [command, ...rest] = process.argv.slice(2);
+if (command === 'install' || command === 'uninstall') {
+  try {
+    if (process.platform !== 'linux') throw new Error('The installer currently supports Linux and WSL only.');
+    const unknown = rest.filter(value => value !== '--no-activate' || command !== 'install');
+    if (unknown.length) throw new Error(`Unknown option: ${unknown[0]}`);
+    process.env.XDG_RUNTIME_DIR ||= `/run/user/${process.getuid()}`;
+    const { install, uninstall } = require('../native/install');
+    const prefix = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'herdr-resurrect/current');
+    const result = command === 'install' ? install({ activate: !rest.includes('--no-activate') }) : uninstall(prefix);
+    process.stdout.write(JSON.stringify(result) + '\n');
+    for (const warning of result.warnings || []) process.stderr.write(`herdr-resurrect: ${warning}\n`);
+  } catch (error) {
+    process.stderr.write(JSON.stringify({ error: error.message }) + '\n');
+    process.exitCode = 1;
+  }
+} else {
+  require('./native-control.js');
+}

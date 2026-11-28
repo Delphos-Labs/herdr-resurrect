@@ -1,20 +1,48 @@
 {
   "name": "herdr-resurrect",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "tmux-resurrect for herdr: snapshot workspaces/tabs/panes/commands/agents and restore them after a crash or reboot.",
   "license": "MIT",
   "engines": {
-    "node": ">=16"
+    "node": ">=22.15"
   },
   "bin": {
-    "herdr-resurrect-save": "bin/save.js",
-    "herdr-resurrect-restore": "bin/restore.js"
+    "herdr-resurrect": "bin/herdr-resurrect"
   },
+  "files": [
+    "native/",
+    "bin/native-*.js",
+    "bin/native-shell.sh",
+    "bin/herdr-resurrect",
+    "mods/resurrect/",
+    "integrations/opencode/",
+    "LICENSE"
+  ],
   "scripts": {
+    "test": "node --test test/native/*.test.js",
+    "test:integration": "node --test test/integration/*.test.js",
+    "test:real": "node --test test/acceptance/*.test.js",
+    "test:guard": "node --test test/guard/*.test.js",
+    "test:inplace": "node --test test/inplace/*.test.js",
     "save": "node bin/save.js",
     "restore": "node bin/restore.js",
     "restore:dry": "node bin/restore.js --dry-run",
     "list": "node bin/list.js"
   },
-  "keywords": ["herdr", "herdr-plugin", "tmux-resurrect", "session", "restore", "crash-recovery"]
+  "keywords": [
+    "herdr",
+    "herdr-plugin",
+    "tmux-resurrect",
+    "session",
+    "restore",
+    "crash-recovery"
+  ],
+  "dependencies": {
+    "proper-lockfile": "4.1.2",
+    "smol-toml": "1.9.1"
+  },
+  "bundleDependencies": [
+    "proper-lockfile",
+    "smol-toml"
+  ]
 }
