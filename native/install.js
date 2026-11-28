@@ -65,15 +65,48 @@ function systemdArgument(value, { environment = false } = {}) {
   return `"${environment ? escaped : escaped.replaceAll('$', () => '$$')}"`;
 }
 
-function serviceUnit({ node, prefix, configFile, home, env }) {
+const unitPath = value => {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || /[\0\r\n\s]/.test(value)) {
+    throw new Error('Unsupported path for a systemd condition.');
+  }
+  return value.replaceAll('%', '%%');
+};
+
+// The path unit starts the recorder, so it never runs before Herdr Core is
+// installed: on a new machine the core arrives when the app first connects.
+function serviceUnit({ node = 'auto', prefix, configFile, home, env, hc }) {
   const environment = Object.entries(env).map(([key, value]) =>
     `Environment=${systemdArgument(`${key}=${value}`, { environment: true })}`).join('\n');
-  return `[Unit]\nDescription=Record native Herdr recovery state\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n`
+  const command = ['/bin/sh', path.join(prefix, 'bin/native-shell.sh'), node,
+    path.join(prefix, 'bin/native-recorder.js'), '--config', configFile];
+  return `[Unit]\nDescription=Record native Herdr recovery state\nStartLimitIntervalSec=60\nStartLimitBurst=3\n`
+    + (hc ? `ConditionPathExists=${unitPath(hc)}\n` : '') + '\n'
     + `[Service]\nType=simple\nUMask=0077\nWorkingDirectory=${home.replaceAll('%', '%%')}\n${environment}\n`
     + 'UnsetEnvironment=HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE\n'
-    + `ExecStart=${[node, path.join(prefix, 'bin/native-recorder.js'), '--config', configFile].map(value => systemdArgument(value)).join(' ')}\n`
-    + 'Restart=on-failure\nRestartSec=5\nTimeoutStopSec=15\nKillMode=control-group\nNoNewPrivileges=yes\n\n'
+    + `ExecStart=${command.map(value => systemdArgument(value)).join(' ')}\n`
+    + 'Restart=on-failure\nRestartSec=5\nTimeoutStopSec=15\nKillMode=control-group\nNoNewPrivileges=yes\n';
+}
+
+function pathUnit({ hc }) {
+  return '[Unit]\nDescription=Start Herdr recovery once Herdr Core is installed\n\n'
+    + `[Path]\nPathExists=${unitPath(hc)}\nUnit=herdr-resurrect.service\n\n`
     + '[Install]\nWantedBy=default.target\n';
+}
+
+function defaultHc(home, env) {
+  try { return executable('hc', env); } catch {
+    return path.join(env.HC_INSTALL_DIR || path.join(home, '.local/bin'), 'hc');
+  }
+}
+
+// Mirrors native-shell.sh "auto": mise's Node for the home directory, else PATH.
+function resolveNode(home, env) {
+  try {
+    const found = execFileSync('mise', ['which', 'node'], { cwd: home, env, encoding: 'utf8', timeout: 10000,
+      stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (path.isAbsolute(found)) return found;
+  } catch { /* fall back to PATH */ }
+  return executable('node', env);
 }
 
 function packageFiles(packageRoot) {
@@ -89,10 +122,16 @@ function packageFiles(packageRoot) {
     } else throw new Error('Unsupported package source type.');
   }
   for (const item of [
-    'native', 'integrations/opencode', 'mods/resurrect', 'LICENSE', 'package.json', 'package-lock.json',
+    'native', 'integrations/opencode', 'mods/resurrect', 'LICENSE', 'package.json',
     'bin/native-control.js', 'bin/native-recorder.js', 'bin/native-shell.js', 'bin/native-shell.sh',
-    'bin/native-install.js',
+    'bin/native-install.js', 'bin/herdr-resurrect',
   ]) visit(item);
+  // A release tarball bundles its dependencies but never carries the lock file.
+  if (!fs.existsSync(path.join(packageRoot, 'package-lock.json'))) {
+    visit('node_modules');
+    return result;
+  }
+  visit('package-lock.json');
   const lock = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package-lock.json')));
   for (const key of Object.keys(lock.packages || {}).sort()) {
     if (!key) continue;
@@ -109,14 +148,17 @@ function planInstall({
   stateHome = process.env.XDG_STATE_HOME || path.join(home, '.local/state'),
   dataHome = process.env.XDG_DATA_HOME || path.join(home, '.local/share'),
   packageRoot = path.resolve(__dirname, '..'), prefix = path.join(dataHome, 'herdr-resurrect/current'),
-  node = executable('node'), hc = executable('hc'), session = 'default', intervalMs = 60000,
+  node = 'auto', hc, session = 'default', intervalMs = 60000,
   shell = [process.env.SHELL || '/bin/sh'], env = process.env,
 } = {}) {
-  for (const value of [home, configHome, stateHome, dataHome, packageRoot, prefix, node, hc]) {
+  hc ||= defaultHc(home, env);
+  for (const value of [home, configHome, stateHome, dataHome, packageRoot, prefix, hc]) {
     if (!path.isAbsolute(value) || /[\0\r\n]/.test(value)) throw new Error('Installation paths must be absolute.');
   }
+  if (node !== 'auto' && (!path.isAbsolute(node) || /[\0\r\n]/.test(node))) throw new Error('Installation paths must be absolute.');
   if (fs.existsSync(prefix)) throw new Error('The installation destination already exists; no automatic overwrite is allowed.');
-  if (execFileSync(node, ['-p', 'typeof process.execve'], { encoding: 'utf8', timeout: 10000 }).trim() !== 'function') {
+  const checkNode = node === 'auto' ? resolveNode(home, env) : node;
+  if (execFileSync(checkNode, ['-p', 'typeof process.execve'], { encoding: 'utf8', timeout: 10000 }).trim() !== 'function') {
     throw new Error('The selected Node executable needs process.execve (Node 22.15 or newer).');
   }
   const configFile = path.join(configHome, 'herdr-resurrect/config.json');
@@ -157,11 +199,13 @@ function planInstall({
     ...(env.LANG ? { LANG: env.LANG } : {}),
   };
   const unitFile = path.join(configHome, 'systemd/user/herdr-resurrect.service');
+  const pathFile = path.join(configHome, 'systemd/user/herdr-resurrect.path');
   const files = [
     { path: configFile, content: JSON.stringify(config, null, 2) + '\n' },
     { path: configCore, content: patch.content },
     { path: cli, content: JSON.stringify(preferences, null, indent).replaceAll('\n', newline) + newline },
-    { path: unitFile, content: serviceUnit({ node, prefix, configFile, home, env: bootEnv }) },
+    { path: unitFile, content: serviceUnit({ node, prefix, configFile, home, env: bootEnv, hc }) },
+    { path: pathFile, content: pathUnit({ hc }) },
   ].map(file => ({ ...file, before: readExisting(file.path).digest }));
   return {
     version: 1, home, configHome, packageRoot, prefix, files, source: packageFiles(packageRoot),
@@ -170,16 +214,15 @@ function planInstall({
       env: { ...bootEnv, CLAUDE_CONFIG_DIR: config.claudeConfigDir,
         ...(config.socket ? { HC_SOCKET: config.socket } : {}) },
     },
-    originalShell: patch.original, configFile, unitFile,
+    originalShell: patch.original, configFile, unitFile, pathFile,
     commands: [['systemctl', '--user', 'daemon-reload'],
-      ['systemctl', '--user', 'enable', '--now', 'herdr-resurrect.service']],
+      ['systemctl', '--user', 'enable', '--now', 'herdr-resurrect.path']],
   };
 }
 
 function applyInstall(plan, { activate = false } = {}) {
   if (plan.version !== 1 || fs.existsSync(plan.prefix)) throw new Error('Installation destination is not empty or plan is invalid.');
-  if (!plan.options || plan.packageRoot !== path.resolve(__dirname, '..')
-    || plan.options.node !== executable('node') || plan.options.hc !== executable('hc')) {
+  if (!plan.options || plan.packageRoot !== path.resolve(__dirname, '..')) {
     throw new Error('The installation plan does not match this package and local executables.');
   }
   if (!isDeepStrictEqual(planInstall(plan.options), plan)) {
@@ -187,15 +230,17 @@ function applyInstall(plan, { activate = false } = {}) {
   }
   if (activate) {
     const actualConfigHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-    if (plan.home !== os.homedir() || plan.configHome !== actualConfigHome
+    if (plan.home !== os.homedir() || plan.home !== os.userInfo().homedir || plan.configHome !== actualConfigHome
       || process.env.XDG_RUNTIME_DIR && process.env.XDG_RUNTIME_DIR !== `/run/user/${process.getuid()}`) {
       throw new Error('Activation requires the actual user home and systemd runtime, not a staging environment.');
     }
-    execFileSync('systemctl', ['--user', 'is-active', 'default.target'], { stdio: 'pipe', timeout: 10000 });
-    const linger = execFileSync('loginctl', ['show-user', String(process.getuid()), '-p', 'Linger'], {
-      encoding: 'utf8', timeout: 10000,
-    }).trim();
-    if (linger !== 'Linger=yes') throw new Error('User lingering must be enabled before activation.');
+  }
+  let manager = false;
+  if (activate) {
+    try {
+      execFileSync('systemctl', ['--user', 'is-active', 'default.target'], { stdio: 'pipe', timeout: 10000 });
+      manager = true;
+    } catch { /* enabled on disk below; the manager starts it at its next start */ }
   }
   for (const file of plan.files) {
     if (readExisting(file.path).digest !== file.before) throw new Error('Configuration changed after planning; generate a new plan.');
@@ -237,10 +282,34 @@ function applyInstall(plan, { activate = false } = {}) {
     version: 1, configFile: plan.configFile, unitFile: plan.unitFile,
     files: plan.files.map(file => ({ path: file.path, before: file.before, installed: hash(file.content) })),
   });
-  if (activate) for (const [command, ...args] of plan.commands) {
+  const warnings = [];
+  if (activate && manager) for (const [command, ...args] of plan.commands) {
     execFileSync(command, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+  } else if (activate) {
+    // A provisioning run can precede the user manager. Enabling is a symlink.
+    const wants = path.join(path.dirname(plan.pathFile), 'default.target.wants');
+    fs.mkdirSync(wants, { recursive: true, mode: 0o700 });
+    const link = path.join(wants, path.basename(plan.pathFile));
+    try { fs.symlinkSync(plan.pathFile, link); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    warnings.push('The systemd user manager is not running; recovery is enabled and starts with it.');
   }
-  return { installed: true, activated: activate, prefix: plan.prefix, configFile: plan.configFile };
+  if (activate) {
+    let linger = '';
+    try {
+      linger = execFileSync('loginctl', ['show-user', String(process.getuid()), '-p', 'Linger'], {
+        encoding: 'utf8', timeout: 10000,
+      }).trim();
+    } catch { /* reported below */ }
+    if (linger !== 'Linger=yes') {
+      warnings.push('User lingering is off, so recovery starts only at login. Herdr Core enables it when it starts.');
+    }
+  }
+  return { installed: true, activated: activate, prefix: plan.prefix, configFile: plan.configFile, warnings };
+}
+
+function isInside(file, directory) {
+  const relative = path.relative(directory, file || '');
+  return Boolean(file) && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 // Reverses applyInstall. Every file must still hold exactly what was installed,
@@ -251,6 +320,9 @@ function uninstall(prefix, { deactivate = true, run = execFileSync } = {}) {
   try { manifest = JSON.parse(fs.readFileSync(path.join(record, 'manifest.json'), 'utf8')); } catch {
     throw new Error('No installation manifest found; nothing was changed.');
   }
+  // systemctl acts on unit names in the account's real manager. Only touch it
+  // when the installation's units live under the account's real home.
+  if (deactivate && !isInside(manifest.unitFile, os.userInfo().homedir)) deactivate = false;
   const steps = manifest.files.map((file, index) => {
     const current = readExisting(file.path);
     if (current.digest !== file.installed) {
@@ -261,6 +333,11 @@ function uninstall(prefix, { deactivate = true, run = execFileSync } = {}) {
     return { path: file.path, before };
   });
   if (deactivate) {
+    // Installations before the path unit have no herdr-resurrect.path.
+    try {
+      run('systemctl', ['--user', 'disable', '--now', 'herdr-resurrect.path'],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
+    } catch { /* not installed by that version */ }
     run('systemctl', ['--user', 'disable', '--now', 'herdr-resurrect.service'],
       { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
   }
@@ -272,9 +349,31 @@ function uninstall(prefix, { deactivate = true, run = execFileSync } = {}) {
       fs.renameSync(temporary, step.path);
     }
   }
+  for (const unit of manifest.files.map(file => file.path).filter(file => file.endsWith('.path'))) {
+    const link = path.join(path.dirname(unit), 'default.target.wants', path.basename(unit));
+    try { if (fs.readlinkSync(link) === unit) fs.unlinkSync(link); } catch { /* no offline enable link */ }
+  }
   if (deactivate) run('systemctl', ['--user', 'daemon-reload'], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 });
   fs.rmSync(prefix, { recursive: true, force: true });
   return { uninstalled: true, restored: steps.map(step => step.path) };
 }
 
-module.exports = { planInstall, applyInstall, uninstall, shellPatch, serviceUnit, packageFiles };
+// One idempotent command for dotfiles and upgrades: install when absent, do
+// nothing when the installed copy matches this package, otherwise replace it.
+function install({ activate = false, run = execFileSync, ...options } = {}) {
+  const home = options.home || os.homedir();
+  const dataHome = options.dataHome || process.env.XDG_DATA_HOME || path.join(home, '.local/share');
+  const prefix = options.prefix || path.join(dataHome, 'herdr-resurrect/current');
+  const packageRoot = options.packageRoot || path.resolve(__dirname, '..');
+  let changed = true;
+  if (fs.existsSync(prefix)) {
+    let same = false;
+    try { same = isDeepStrictEqual(packageFiles(prefix), packageFiles(packageRoot)); } catch { same = false; }
+    if (same) return { installed: true, changed: false, prefix };
+    uninstall(prefix, { deactivate: activate, run });
+  }
+  const plan = planInstall({ ...options, home, dataHome, prefix, packageRoot });
+  return { ...applyInstall(plan, { activate }), changed };
+}
+
+module.exports = { planInstall, applyInstall, install, uninstall, shellPatch, serviceUnit, pathUnit, packageFiles };

@@ -90,9 +90,54 @@ function launchFor(program, argv, env, home = os.homedir()) {
   if (program.tool !== 'claude' || !program.profile) return { argv, env };
   const explicit = typeof program.profileExplicit === 'boolean'
     ? program.profileExplicit : path.resolve(program.profile) !== path.join(home, '.claude');
-  if (explicit) return { argv, env: { ...env, CLAUDE_CONFIG_DIR: program.profile } };
+  if (explicit) {
+    return { argv: ['env', `CLAUDE_CONFIG_DIR=${program.profile}`, ...argv], env: { ...env, CLAUDE_CONFIG_DIR: program.profile } };
+  }
   const { CLAUDE_CONFIG_DIR: _unset, ...rest } = env;
   return { argv: ['env', '-u', 'CLAUDE_CONFIG_DIR', ...argv], env: rest };
 }
 
-module.exports = { resolveIdentity, readIdentity, resumeArgv, launchFor };
+// The core and its gateway start outside any login shell, so a restored
+// program would miss what the user's shell configuration exports, such as API
+// keys. Start it through the login shell, which then replaces itself with it.
+// A login profile can reset PATH, so the program is resolved first: the
+// wrapper adds the shell's environment without changing which program runs.
+function throughLoginShell(argv, shell = os.userInfo().shell, env = process.env) {
+  const name = path.basename(shell || '');
+  if (!path.isAbsolute(shell || '')) return argv;
+  if (name === 'fish') return [shell, '-l', '-c', 'exec $argv', '--', ...resolveProgram(argv, env)];
+  if (['sh', 'bash', 'zsh', 'dash', 'ksh'].includes(name)) {
+    return [shell, '-l', '-c', 'exec "$@"', name, ...resolveProgram(argv, env)];
+  }
+  return argv;
+}
+
+function resolveProgram(argv, env) {
+  const result = [...argv];
+  let index = 0;
+  if (path.basename(result[0] || '') === 'env') {
+    index = 1;
+    while (index < result.length) {
+      if (result[index] === '-u') index += 2;
+      else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(result[index])) index += 1;
+      else break;
+    }
+    result[0] = which(result[0], env) || result[0];
+  }
+  if (index < result.length) result[index] = which(result[index], env) || result[index];
+  return result;
+}
+
+function which(name, env) {
+  if (path.isAbsolute(name) || name.includes('/')) return name;
+  for (const directory of (env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(directory, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch { /* next */ }
+  }
+  return null;
+}
+
+module.exports = { resolveIdentity, readIdentity, resumeArgv, launchFor, throughLoginShell };

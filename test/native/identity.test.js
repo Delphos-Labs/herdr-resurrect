@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { resolveIdentity, resumeArgv } = require('../../native/identity');
 
 test('same-directory agents retain distinct per-process conversations', () => {
@@ -57,8 +60,9 @@ test('a Claude profile is set at launch only when the original process set it', 
   const argv = ['claude', '--resume', '12345678-1234-1234-1234-123456789abc'];
   const caller = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/caller/profile' };
   const swap = { tool: 'claude', profile: '/home/u/.swap/a', profileExplicit: true };
+  // The profile goes in argv too, so a shell's own configuration cannot change it.
   assert.deepEqual(launchFor(swap, argv, caller, '/home/u'),
-    { argv, env: { PATH: '/bin', CLAUDE_CONFIG_DIR: '/home/u/.swap/a' } });
+    { argv: ['env', 'CLAUDE_CONFIG_DIR=/home/u/.swap/a', ...argv], env: { PATH: '/bin', CLAUDE_CONFIG_DIR: '/home/u/.swap/a' } });
   // Claude reads ~/.claude.json only while the variable is unset, even when it
   // would name ~/.claude. The core's own environment may set it, so remove it in argv.
   const plain = { tool: 'claude', profile: '/home/u/.claude', profileExplicit: false };
@@ -71,8 +75,38 @@ test('snapshots without the profile flag treat only the default directory as uns
   const argv = ['claude', '--resume', '12345678-1234-1234-1234-123456789abc'];
   assert.equal(launchFor({ tool: 'claude', profile: '/home/u/.claude' }, argv, {}, '/home/u').argv[0], 'env');
   assert.deepEqual(launchFor({ tool: 'claude', profile: '/home/u/.other' }, argv, {}, '/home/u'),
-    { argv, env: { CLAUDE_CONFIG_DIR: '/home/u/.other' } });
+    { argv: ['env', 'CLAUDE_CONFIG_DIR=/home/u/.other', ...argv], env: { CLAUDE_CONFIG_DIR: '/home/u/.other' } });
   const opencode = ['opencode', '-s', 'ses_one'];
   assert.deepEqual(launchFor({ tool: 'opencode' }, opencode, { A: '1' }, '/home/u'),
     { argv: opencode, env: { A: '1' } });
+});
+
+test('restored programs start through the login shell, so its configuration loads secrets', () => {
+  const { throughLoginShell } = require('../../native/identity');
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-bin-'));
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, 'env'), '#!/bin/sh\n', { mode: 0o700 });
+  const env = { PATH: bin };
+  const argv = ['env', '-u', 'CLAUDE_CONFIG_DIR', 'A=1', 'claude', '--resume', 'id'];
+  const resolved = [path.join(bin, 'env'), '-u', 'CLAUDE_CONFIG_DIR', 'A=1', path.join(bin, 'claude'), '--resume', 'id'];
+  assert.deepEqual(throughLoginShell(argv, '/usr/bin/fish', env), ['/usr/bin/fish', '-l', '-c', 'exec $argv', '--', ...resolved]);
+  assert.deepEqual(throughLoginShell(argv, '/bin/bash', env), ['/bin/bash', '-l', '-c', 'exec "$@"', 'bash', ...resolved]);
+  assert.deepEqual(throughLoginShell(argv, '/usr/bin/zsh', env), ['/usr/bin/zsh', '-l', '-c', 'exec "$@"', 'zsh', ...resolved]);
+  assert.deepEqual(throughLoginShell(argv, '/usr/bin/nu', env), argv, 'an unknown shell syntax is not guessed');
+  assert.deepEqual(throughLoginShell(argv, '', env), argv);
+  fs.rmSync(bin, { recursive: true, force: true });
+});
+
+test('the login shell wrapper passes arguments through unchanged and replaces itself', t => {
+  const { throughLoginShell } = require('../../native/identity');
+  const { spawnSync } = require('node:child_process');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-login-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const argv = ['/bin/sh', '-c', 'printf "<%s>" "$0" "$@"; echo',
+    'zero', '--resume', 'a b', '-i', '$HOME'];
+  for (const shell of ['/bin/sh', '/bin/bash', '/usr/bin/fish'].filter(file => fs.existsSync(file))) {
+    const result = spawnSync(throughLoginShell(argv, shell)[0], throughLoginShell(argv, shell).slice(1),
+      { encoding: 'utf8', env: { HOME: home, PATH: '/usr/bin:/bin' } });
+    assert.equal(result.stdout.split('\n')[0], '<zero><--resume><a b><-i><$HOME>', shell);
+  }
 });

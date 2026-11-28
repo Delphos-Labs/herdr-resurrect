@@ -29,7 +29,7 @@ test('isolated core captures distinct live agents and preserves a weighted tree 
           '--prompt', 'THIS MUST NEVER BE SAVED'],
         cwd: core.root, no_parent: true, no_notify: true, outlive_parent: true,
         env: { TEST_TOOL: tool, TEST_SESSION: session, TEST_RECORDS: tool === 'claude' ? claude : records,
-          TEST_READY: ready },
+          TEST_READY: ready, ...(tool === 'claude' ? { CLAUDE_CONFIG_DIR: claude } : {}) },
       }));
       started.push(result.address);
     }

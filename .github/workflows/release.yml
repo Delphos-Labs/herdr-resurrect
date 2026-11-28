@@ -1,0 +1,30 @@
+name: release
+
+# A tag vX.Y.Z publishes the package tarball, with its dependencies bundled,
+# as a GitHub release asset. mise installs it with
+# "github:Delphos-Labs/herdr-resurrect".
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check the tag matches package.json
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - run: npm ci
+      - run: npm test
+      - name: Pack
+        run: npm pack
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "herdr-resurrect-${GITHUB_REF_NAME#v}.tgz" --title "$GITHUB_REF_NAME" --generate-notes

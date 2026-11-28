@@ -7,7 +7,7 @@ const { isDeepStrictEqual } = require('node:util');
 const lockfile = require('proper-lockfile');
 const { validateLayout, remapLayout } = require('./layout');
 const { validateSnapshot } = require('./store');
-const { resumeArgv, launchFor } = require('./identity');
+const { resumeArgv, launchFor, throughLoginShell } = require('./identity');
 const { toolArgv } = require('./tools');
 const { verifySession: defaultVerifySession, launchDirectory } = require('./sessions');
 const { readPending, requestResume } = require('./pending');
@@ -123,7 +123,7 @@ async function planRestore(core, snapshot, { host, stateDir, env = process.env, 
   return { current, actions, replacements, coreId: handshake.core?.id || null };
 }
 
-async function restore(core, snapshot, { stateDir, host, env = {}, verifySession = defaultVerifySession, expected }) {
+async function restore(core, snapshot, { stateDir, host, env = {}, verifySession = defaultVerifySession, expected, shell }) {
   if (!path.isAbsolute(stateDir || '')) throw new Error('An absolute restore state directory is required.');
   const release = await lockfile.lock(stateDir, {
     lockfilePath: path.join(stateDir, '.restore.lock'), stale: 30000, update: 10000,
@@ -159,7 +159,7 @@ async function restore(core, snapshot, { stateDir, host, env = {}, verifySession
       }
       const launch = launchFor(program, action.argv, env);
       const terminal = await core.request('terminal.run', {
-        argv: launch.argv, cwd: action.cwd, env: launch.env, no_parent: true, no_notify: true,
+        argv: throughLoginShell(launch.argv, shell || undefined, { ...process.env, ...launch.env }), cwd: action.cwd, env: launch.env, no_parent: true, no_notify: true,
         outlive_parent: true, keep: true,
         labels: { 'resurrect.host': host, 'resurrect.pane': action.pane, 'resurrect.run': run },
       });

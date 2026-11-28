@@ -142,9 +142,10 @@ test('a default-profile Claude session is launched without a Claude profile vari
   const env = setup(t);
   const claude = env.saved.programs.find(program => program.tool === 'claude');
   Object.assign(claude, { profile: path.join(os.homedir(), '.claude'), profileExplicit: false });
-  await restore(env.core, env.saved, { ...options(env), env: { CLAUDE_CONFIG_DIR: '/caller/profile' } });
+  await restore(env.core, env.saved, { ...options(env), env: { CLAUDE_CONFIG_DIR: '/caller/profile' }, shell: '/usr/bin/fish' });
   const run = env.calls.find(call => call.method === 'terminal.run' && call.params.argv.includes('--resume'));
-  assert.deepEqual(run.params.argv.slice(0, 4), ['env', '-u', 'CLAUDE_CONFIG_DIR', 'claude']);
+  assert.deepEqual(run.params.argv.slice(0, 5), ['/usr/bin/fish', '-l', '-c', 'exec $argv', '--']);
+  assert.deepEqual(run.params.argv.slice(5, 9).map(value => path.basename(value)), ['env', '-u', 'CLAUDE_CONFIG_DIR', 'claude']);
   assert.ok(!Object.hasOwn(run.params.env, 'CLAUDE_CONFIG_DIR'));
 });
 

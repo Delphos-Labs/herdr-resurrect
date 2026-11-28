@@ -11,7 +11,7 @@ const { SnapshotStore, readJson } = require('../native/store');
 const { registerPending } = require('../native/pending');
 const { processStart } = require('../native/capture');
 const { verifySession, launchDirectory } = require('../native/sessions');
-const { resumeArgv, launchFor } = require('../native/identity');
+const { resumeArgv, launchFor, throughLoginShell } = require('../native/identity');
 const { toolArgv } = require('../native/tools');
 
 function execute(argv, env = process.env) {
@@ -80,7 +80,10 @@ async function main() {
       if (!cwd) throw new Error('No saved working directory exists.');
       process.chdir(cwd);
       clear();
-      execute(argv, env);
+      // Start it through this terminal's own shell, so its configuration loads.
+      let shell = null;
+      try { shell = executable(original[0], env); } catch { /* run without a login shell */ }
+      execute(shell ? throughLoginShell(argv, shell, env) : argv, env);
     } catch (error) {
       executing = false;
       if (fs.existsSync(requestFile)) fs.unlinkSync(requestFile);

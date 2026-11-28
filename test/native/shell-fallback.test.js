@@ -40,3 +40,17 @@ test('a gateway failure still opens the wrapped shell', () => {
   assert.match(result.stderr, /Herdr recovery shell failed/);
   assert.match(result.stderr, /Opening the shell without recovery/);
 });
+
+test('the launcher resolves Node itself when asked for auto', () => {
+  const result = spawnSync('/bin/sh', [launcher, 'auto', '-e', 'console.log("gateway-ran")'],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` } });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'gateway-ran\n');
+});
+
+test('the launcher opens the shell when auto finds no Node', () => {
+  const result = spawnSync('/bin/sh', [launcher, 'auto', gateway, '--', '/bin/sh', '-c', 'echo shell-ran'],
+    { encoding: 'utf8', env: { HOME: os.tmpdir(), PATH: '/nonexistent' } });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, 'shell-ran\n');
+});

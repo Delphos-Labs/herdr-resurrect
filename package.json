@@ -1,16 +1,23 @@
 {
   "name": "herdr-resurrect",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "tmux-resurrect for herdr: snapshot workspaces/tabs/panes/commands/agents and restore them after a crash or reboot.",
   "license": "MIT",
   "engines": {
     "node": ">=22.15"
   },
   "bin": {
-    "herdr-resurrect": "bin/native-control.js",
-    "herdr-resurrect-install": "bin/native-install.js"
+    "herdr-resurrect": "bin/herdr-resurrect"
   },
-  "files": ["native/", "bin/native-*.js", "mods/resurrect/", "integrations/opencode/", "LICENSE"],
+  "files": [
+    "native/",
+    "bin/native-*.js",
+    "bin/native-shell.sh",
+    "bin/herdr-resurrect",
+    "mods/resurrect/",
+    "integrations/opencode/",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test test/native/*.test.js",
     "test:integration": "node --test test/integration/*.test.js",
@@ -33,5 +40,9 @@
   "dependencies": {
     "proper-lockfile": "4.1.2",
     "smol-toml": "1.9.1"
-  }
+  },
+  "bundleDependencies": [
+    "proper-lockfile",
+    "smol-toml"
+  ]
 }

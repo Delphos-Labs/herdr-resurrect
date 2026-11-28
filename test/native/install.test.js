@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { planInstall, applyInstall, uninstall, shellPatch, serviceUnit } = require('../../native/install');
+const { planInstall, applyInstall, uninstall, shellPatch, serviceUnit, install } = require('../../native/install');
 const { readConfig } = require('../../native/config');
 
 function home(t) {
@@ -99,7 +99,11 @@ test('the core shell starts the gateway through /bin/sh so a missing Node still 
 test('uninstall restores every file exactly and removes the installation', t => {
   const { plan, configHome, cli, core } = installedHome(t);
   const calls = [];
+  const realHome = os.userInfo().homedir;
+  const homedir = t.mock.method(os, 'userInfo', () => ({ homedir: path.dirname(plan.home), username: 'test' }));
   const result = uninstall(plan.prefix, { run: (...args) => calls.push(args) });
+  homedir.mock.restore();
+  assert.notEqual(realHome, path.dirname(plan.home));
   assert.equal(result.uninstalled, true);
   assert.equal(fs.readFileSync(path.join(configHome, 'opencode/cli.json'), 'utf8'), cli);
   assert.equal(fs.readFileSync(path.join(configHome, 'herdr-core/config.toml'), 'utf8'), core);
@@ -107,9 +111,11 @@ test('uninstall restores every file exactly and removes the installation', t => 
   assert.equal(fs.existsSync(plan.unitFile), false);
   assert.equal(fs.existsSync(plan.prefix), false);
   assert.deepEqual(calls.map(([command, args]) => [command, ...args]), [
+    ['systemctl', '--user', 'disable', '--now', 'herdr-resurrect.path'],
     ['systemctl', '--user', 'disable', '--now', 'herdr-resurrect.service'],
     ['systemctl', '--user', 'daemon-reload'],
   ]);
+  assert.equal(fs.existsSync(plan.pathFile), false);
 });
 
 test('uninstall changes nothing when an installed file was edited afterwards', t => {
@@ -133,4 +139,54 @@ test('service commands escape systemd expansion and do not save credentials', ()
   assert.ok(unit.includes('Restart=on-failure'));
   assert.ok(unit.includes('KillMode=control-group'));
   assert.ok(!unit.includes('ANTHROPIC') && !unit.includes('TOKEN'));
+});
+
+test('a machine without Herdr Core yet still installs, and the recorder waits for hc', t => {
+  const directory = home(t);
+  const plan = planInstall({ home: directory, configHome: path.join(directory, 'config'),
+    stateHome: path.join(directory, 'state'), dataHome: path.join(directory, 'data'), shell: ['/bin/sh'],
+    env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` } });
+  const hc = path.join(directory, '.local/bin/hc');
+  assert.equal(plan.options.hc, hc);
+  const unit = plan.files.find(file => file.path === plan.unitFile).content;
+  const pathUnit = plan.files.find(file => file.path === plan.pathFile).content;
+  assert.ok(unit.includes(`ConditionPathExists=${hc}`));
+  assert.ok(!unit.includes('[Install]'), 'only the path unit starts the recorder');
+  assert.ok(pathUnit.includes(`PathExists=${hc}`) && pathUnit.includes('WantedBy=default.target'));
+  assert.deepEqual(plan.commands.at(-1), ['systemctl', '--user', 'enable', '--now', 'herdr-resurrect.path']);
+  applyInstall(plan);
+  assert.equal(execFileSync('systemd-analyze', ['--user', 'verify', plan.unitFile, plan.pathFile], { encoding: 'utf8' }).trim(), '');
+});
+
+test('the installation names no versioned Node path, so a toolchain upgrade cannot strand it', t => {
+  const { plan, configHome } = installedHome(t);
+  const shell = JSON.parse(fs.readFileSync(path.join(configHome, 'herdr-core/config.toml'), 'utf8').match(/^shell = (.*)$/m)[1]);
+  assert.equal(shell[2], 'auto');
+  const unit = fs.readFileSync(plan.unitFile, 'utf8');
+  assert.match(unit, /ExecStart="\/bin\/sh" "[^"]*native-shell\.sh" "auto" "[^"]*native-recorder\.js"/);
+  assert.ok(!/installs\/node\/[0-9]/.test(unit.split('\n').find(line => line.startsWith('ExecStart'))));
+});
+
+test('install is idempotent and replaces an installation that differs from this package', t => {
+  const { plan, configHome } = installedHome(t);
+  const options = { home: plan.home, configHome, stateHome: plan.options.stateHome,
+    dataHome: plan.options.dataHome, shell: ['/bin/sh'] };
+  const run = () => {};
+  assert.deepEqual(install({ ...options, run }), { installed: true, changed: false, prefix: plan.prefix });
+  fs.appendFileSync(path.join(plan.prefix, 'native/restore.js'), '// older release\n');
+  const upgraded = install({ ...options, run });
+  assert.equal(upgraded.changed, true);
+  assert.ok(!fs.readFileSync(path.join(plan.prefix, 'native/restore.js'), 'utf8').includes('older release'));
+  const shell = fs.readFileSync(path.join(configHome, 'herdr-core/config.toml'), 'utf8');
+  assert.equal((shell.match(/native-shell\.sh/g) || []).length, 1, 'the gateway is not nested');
+});
+
+test('uninstall never touches the real user manager for an installation in another home', t => {
+  const { plan } = installedHome(t);
+  const manifest = path.join(plan.prefix, '.installation/manifest.json');
+  const record = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+  assert.ok(!record.unitFile.startsWith(os.userInfo().homedir + path.sep));
+  const calls = [];
+  uninstall(plan.prefix, { run: (...args) => calls.push(args) });
+  assert.deepEqual(calls, []);
 });
