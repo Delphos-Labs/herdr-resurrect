@@ -9,7 +9,7 @@ const { validateLayout, remapLayout } = require('./layout');
 const { validateSnapshot } = require('./store');
 const { resumeArgv, launchFor } = require('./identity');
 const { toolArgv } = require('./tools');
-const { verifySession: defaultVerifySession } = require('./sessions');
+const { verifySession: defaultVerifySession, launchDirectory } = require('./sessions');
 const { readPending, requestResume } = require('./pending');
 
 function panes(document) {
@@ -85,9 +85,11 @@ async function planRestore(core, snapshot, { host, stateDir, env = process.env, 
       if (pending) {
         if (!['exact', 'tool'].includes(program.state)) throw new Error('Waiting pane has no supported saved program.');
         const session = program.state === 'exact' ? await verifySession(program, { env }) : undefined;
+        const cwd = launchDirectory(program, session);
+        if (!cwd) throw new Error(`No saved working directory exists for pane ${pane}.`);
         actions.push({
           action: 'resume-in-place', pane, source: source.terminal, terminal: live[0].address,
-          space: source.space, tab: source.tab, cwd: program.cwd,
+          space: source.space, tab: source.tab, cwd, ...(cwd !== program.cwd ? { savedCwd: program.cwd } : {}),
           argv: program.state === 'exact' ? resumeArgv(program) : toolArgv(program),
           pending, ...(session ? { session } : {}),
         });
@@ -103,16 +105,15 @@ async function planRestore(core, snapshot, { host, stateDir, env = process.env, 
     if (!['exact', 'tool', 'shell'].includes(program.state)) {
       throw new Error(`Pane ${pane} has no exact supported restore record.`);
     }
-    if (!path.isAbsolute(program.cwd || '') || !fs.statSync(program.cwd).isDirectory()) {
-      throw new Error(`Saved working directory is unavailable for pane ${pane}.`);
-    }
     const session = program.state === 'exact' ? await verifySession(program, { env }) : undefined;
     if (Number.isFinite(session?.created) && session.created > snapshot.at) {
       throw new Error('The conversation was created after this snapshot; refusing an empty replacement.');
     }
+    const cwd = launchDirectory(program, session);
+    if (!cwd) throw new Error(`No saved working directory exists for pane ${pane}.`);
     actions.push({
       action: 'launch', pane, source: source.terminal, space: source.space, tab: source.tab,
-      cwd: program.cwd, argv: program.state === 'exact' ? resumeArgv(program)
+      cwd, ...(cwd !== program.cwd ? { savedCwd: program.cwd } : {}), argv: program.state === 'exact' ? resumeArgv(program)
         : program.state === 'shell' ? [] : toolArgv(program),
       ...(session ? { session } : {}),
     });

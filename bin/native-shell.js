@@ -10,7 +10,7 @@ const { readConfig, hostOptions, executable } = require('../native/config');
 const { SnapshotStore, readJson } = require('../native/store');
 const { registerPending } = require('../native/pending');
 const { processStart } = require('../native/capture');
-const { verifySession } = require('../native/sessions');
+const { verifySession, launchDirectory } = require('../native/sessions');
 const { resumeArgv, launchFor } = require('../native/identity');
 const { toolArgv } = require('../native/tools');
 
@@ -75,11 +75,10 @@ async function main() {
       const next = request.program;
       const launch = launchFor(next, next.state === 'exact' ? resumeArgv(next) : toolArgv(next), { ...process.env });
       const { argv, env } = launch;
-      if (next.state === 'exact') await verifySession(next, { env });
-      if (!path.isAbsolute(next.cwd || '') || !fs.statSync(next.cwd).isDirectory()) {
-        throw new Error('Saved working directory is unavailable.');
-      }
-      process.chdir(next.cwd);
+      const session = next.state === 'exact' ? await verifySession(next, { env }) : undefined;
+      const cwd = launchDirectory(next, session);
+      if (!cwd) throw new Error('No saved working directory exists.');
+      process.chdir(cwd);
       clear();
       execute(argv, env);
     } catch (error) {

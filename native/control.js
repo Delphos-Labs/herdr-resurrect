@@ -84,7 +84,7 @@ class HostControl {
         expected: { coreId: plan.coreId, version: plan.current.version },
       });
       return { ticket, snapshotAt: selected.at, actions: plan.actions.map(action => ({
-        action: action.action, pane: action.pane, cwd: action.cwd,
+        action: action.action, pane: action.pane, cwd: action.cwd, ...(action.savedCwd ? { savedCwd: action.savedCwd } : {}),
         terminal: action.terminal || null, command: action.argv || [],
       })) };
     });

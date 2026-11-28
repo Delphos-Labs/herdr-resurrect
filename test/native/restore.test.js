@@ -147,3 +147,29 @@ test('a default-profile Claude session is launched without a Claude profile vari
   assert.deepEqual(run.params.argv.slice(0, 4), ['env', '-u', 'CLAUDE_CONFIG_DIR', 'claude']);
   assert.ok(!Object.hasOwn(run.params.env, 'CLAUDE_CONFIG_DIR'));
 });
+
+test('a missing saved directory falls back to the directory the session record names', async t => {
+  const env = setup(t);
+  const start = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-start-'));
+  t.after(() => fs.rmSync(start, { recursive: true, force: true }));
+  env.saved.programs.forEach(program => { program.cwd = path.join(env.directory, 'deleted'); });
+  const plan = await planRestore(env.core, env.saved, { ...options(env),
+    verifySession: async program => ({ id: program.session,
+      ...(program.tool === 'claude' ? { startCwd: start } : { directory: start }) }) });
+  assert.deepEqual(plan.actions.map(action => [action.cwd, action.savedCwd]),
+    [[start, path.join(env.directory, 'deleted')], [start, path.join(env.directory, 'deleted')]]);
+});
+
+test('an existing saved directory wins over the session start directory', async t => {
+  const env = setup(t);
+  const plan = await planRestore(env.core, env.saved, { ...options(env),
+    verifySession: async program => ({ id: program.session, startCwd: os.tmpdir(), directory: os.tmpdir() }) });
+  assert.ok(plan.actions.every(action => action.cwd === env.directory && !('savedCwd' in action)));
+});
+
+test('a pane with no existing directory is refused before anything starts', async t => {
+  const env = setup(t);
+  env.saved.programs[1].cwd = '/no/such/dir';
+  await assert.rejects(restore(env.core, env.saved, options(env)), /No saved working directory exists/);
+  assert.ok(!env.calls.some(call => call.method === 'terminal.run'));
+});
